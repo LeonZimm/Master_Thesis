@@ -113,33 +113,33 @@ IR_eval_fct <- function(model, validation, test, n_cores) {
 }
 evaluation_fct <- function(model_type, model, test) {
   # Prediction
-  pred <- predict(model, test)$predictions
+  predi <- predict(model, test)$predictions
   
   if (model_type == "CONCENTRATION") {
     # MSE
-    mse <- mean((test$conc - pred)^2)
+    mse <- mean((test$conc - predi)^2)
     # RMSE
     rmse <- sqrt(mse)
     # MAE
-    mae <- mean(abs(test$conc - pred))
+    mae <- mean(abs(test$conc - predi))
     # R squared
-    r2 <- 1 - sum((test$conc - pred)^2) / sum((test$conc - mean(test$conc))^2)
+    r2 <- 1 - sum((test$conc - predi)^2) / sum((test$conc - mean(test$conc))^2)
     
     list("mse" = mse,
          "rmse" = rmse,
          "mae" = mae, 
          "r2" = r2,
-         "pred" = pred)
+         "pred" = predi)
   } else {
   # AUC
-  mm <- mmdata(pred[, 1],
+  mm <- mmdata(predi[, 1],
                test$det,
                posclass = "D")
   evalmod <- evalmod(mm)
   auc <- auc(evalmod)[1, 4]
   pr_auc <- auc(evalmod)[2, 4]
   # F1
-  pred <- as.factor(ifelse(pred[, 1] >= 0.5, "D", "ND"))
+  pred <- as.factor(ifelse(predi[, 1] >= 0.5, "D", "ND"))
   f1 <- F1_Score(y_pred = pred,
                  y_true = test$det,
                  positive = "D")
@@ -167,12 +167,20 @@ hp_tun_fct <- function(data,
   # Table for results
   res_log <- data.table()
   # Create folds
-  set.seed(seed)
-  folds <- createFolds(data$det, 
-                       k = kfolds,
-                       list = TRUE,
-                       returnTrain = FALSE)
-  
+  if (model_type == "CONCENTRATION") {
+    set.seed(seed)
+    folds <- createFolds(data$conc, 
+                         k = kfolds,
+                         list = TRUE,
+                         returnTrain = FALSE)
+    
+  } else {
+    set.seed(seed)
+    folds <- createFolds(data$det, 
+                         k = kfolds,
+                         list = TRUE,
+                         returnTrain = FALSE)
+  }
   for (val in param_values) {
     cat(model_type, "\n",
         "Tuning", param_name, "=", val,
@@ -411,7 +419,7 @@ rf_fct <- function(data,
                    n_trees = 120,
                    kfolds = 5,
                    cores = 7,
-                   ntree_val = c(50, 100, 120, 150, 200)) {
+                   ntree_val = c(50, 100, 150, 200)) {
   
   if (model_type == "SINGLE SUBSTANCE") {
     chem_name <- chem[cas == cas_nr]$chemical
@@ -526,7 +534,9 @@ rf_fct <- function(data,
                            seed = 25)
         
         # Predict and Calculate Performance Metrics 
-        res_list <- evaluation_fct(rfs_perm, rfs_test)
+        res_list <- evaluation_fct(model_type = model_type,
+                                   rfs_perm,
+                                   rfs_test)
         
         # Variable importance table + error log
         impu_list[[k]] <- as.data.table(rfs_impu$variable.importance, keep.rownames = TRUE)
@@ -656,7 +666,9 @@ rf_fct <- function(data,
                            seed = 25)
         
         # Predict and Calculate Performance Metrics 
-        res_list <- evaluation_fct(rfs_perm, rfs_test)
+        res_list <- evaluation_fct(model_type = model_type,
+                                   rfs_perm, 
+                                   rfs_test)
         
         # Variable importance table + error log
         impu_list[[k]] <- as.data.table(rfs_impu$variable.importance, keep.rownames = TRUE)
@@ -746,6 +758,7 @@ rf_fct <- function(data,
                       ntree_val,
                       fixed_params = list(),
                       kfolds = kfolds,
+                      cores = cores,
                       model_type = model_type)
   
   
@@ -757,6 +770,7 @@ rf_fct <- function(data,
                      mtry_val,
                      fixed_params = list(num.trees = ntree$tunval),
                      kfolds = kfolds,
+                     cores = cores,
                      model_type = model_type)
   
   
@@ -769,6 +783,7 @@ rf_fct <- function(data,
                      fixed_params = list(num.trees = ntree$tunval,
                                          mtry = mtry$tunval),
                      kfolds = kfolds,
+                     cores = cores,
                      model_type = model_type)
   
   
@@ -782,12 +797,13 @@ rf_fct <- function(data,
                                          mtry = mtry$tunval,
                                          sample.fraction = safr$tunval),
                      kfolds = kfolds,
+                     cores = cores,
                      model_type = model_type)
   
   
   # 2.5 Splitting rule ------------------------------------------------------
   if (model_type == "CONCENTRATION") {
-    sprl_val <- c("variance", "extratrees", "maxstat", "beta", "poisson")
+    sprl_val <- c("variance", "extratrees", "poisson")
   } else {
     sprl_val <- c("gini", "extratrees", "hellinger")
   }
@@ -800,6 +816,7 @@ rf_fct <- function(data,
                                          sample.fraction = safr$tunval,
                                          min.node.size = ndsz$tunval),
                      kfolds = kfolds,
+                     cores = cores,
                      model_type = model_type)
   
   hypa <- list("ntree" = ntree,
@@ -820,7 +837,9 @@ rf_fct <- function(data,
                                  num.threads = cores,
                                  seed = 25)
     
-    basli_res_list <- evaluation_fct(basli_model_ranger, data_test)
+    basli_res_list <- evaluation_fct(model_type = model_type, 
+                                     basli_model_ranger, 
+                                     data_test)
     
     basli_model <- list("res" = basli_res_list,
                         "model" = basli_model_ranger)
@@ -837,7 +856,9 @@ rf_fct <- function(data,
                                num.threads = cores,
                                seed = 25)
     
-    opt_res_list <- IR_eval_fct(opt_model_ranger, data_val, data_test, 10)
+    opt_res_list <- evaluation_fct(model_type = model_type,
+                                   opt_model_ranger,
+                                   data_test)
     
     opt_model <- list("res" = opt_res_list,
                       "model" = opt_model_ranger,
@@ -856,7 +877,9 @@ rf_fct <- function(data,
                                  probability = TRUE,
                                  seed = 25)
     
-    basli_res_list <- evaluation_fct(basli_model_ranger, data_test)
+    basli_res_list <- evaluation_fct(model_type = model_type, 
+                                     basli_model_ranger,
+                                     data_test)
     cf_basli <- confusionMatrix(as.factor(basli_res_list$pred),
                                 data_test$det, 
                                 positive = "D")
@@ -878,7 +901,10 @@ rf_fct <- function(data,
                                num.threads = cores,
                                seed = 25)
     
-    opt_res_list <- IR_eval_fct(opt_model_ranger, data_val, data_test, 10)
+    opt_res_list <- IR_eval_fct(opt_model_ranger,
+                                data_val, 
+                                data_test, 
+                                10)
     cf_opt <- confusionMatrix(as.factor(opt_res_list$pred),
                               data_test$det, 
                               positive = "D")
@@ -916,12 +942,11 @@ conc_col <- c("conc", "ld", "lq")
 # Physicochemcial
 phychem_col <- c("sw", "kow", "pka", "p", "h", "dr_soil", "dr_wat_sed", "koc", "gus")
 
-
-# Compare Catchment Scale Predictors --------------------------------------
-scale_res <- scale_stability_fct(fra)
-scale_res <- scale_res[, ":="(avg_order = mean(order), sd_order = sd(order)), by = V1]
-scale_res <- scale_res[, avg_order := mean(order), by = V1]
-saveRDS(scale_res, "results/catch_scale.rds")
+# Compare Catchment Scale Predictors 
+# scale_res <- scale_stability_fct(fra)
+# scale_res <- scale_res[, ":="(avg_order = mean(order), sd_order = sd(order)), by = V1]
+# scale_res <- scale_res[, avg_order := mean(order), by = V1]
+# saveRDS(scale_res, "results/catch_scale.rds")
 # 10km catchment continuously outperforms 1km/100m predictors -> remove 1km/100m predictors
 pred_names <- names(fra)[names(fra) != "site.id"]
 scale_rm <- grepl("_100m|_1km", pred_names)
@@ -973,14 +998,14 @@ for (cn in chem_name) {
 saveRDS(all_mod, "results/sing_sub.rds")
 
 
-# PhysicoChemical Model -----------------------------------------------------------
+# Physicochemical Model -----------------------------------------------------------
 cols_phychem <- setdiff(names(fra), c(rm_col, conc_col, "cas"))
 rf_fct(fra[complete.cases(fra[, ..cols_phychem]), ..cols_phychem],
        model_type = "PHYSICO CHEMICAL",
        cores = 5)
 
-omnibus <- model_results_fct("phychem")
-saveRDS(omnibus, "results/phychem.rds")
+phychem <- model_results_fct("phychem")
+saveRDS(phychem, "results/phychem.rds")
 
 
 
