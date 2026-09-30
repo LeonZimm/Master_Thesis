@@ -299,7 +299,7 @@ num_hypa_fct <- function(model_type, res, para){
     if (!any((res$mse < (best_zone)) & (res[[para]] < res[[para]][which.min(res$mse)]))) {
       para_tun = res[[para]][which.min(res$mse)]
     } else {
-      para_tun = res[[para]][res[[para]] == min(res[[para]][(res$mse < (best_zone)) & (res[[para]] < res[[para]][which.max(res$mse)])])]
+      para_tun = res[[para]][res[[para]] == min(res[[para]][(res$mse < (best_zone)) & (res[[para]] < res[[para]][which.min(res$mse)])])]
     }
     
     plot <- ggplot(res, aes(x = !!sym(para), y = mse, group = 1)) +
@@ -1008,21 +1008,13 @@ phychem <- model_results_fct("phychem")
 saveRDS(phychem, "results/phychem.rds")
 
 
-
-
-
-
-
-
-
-
 # Concentration Model -----------------------------------------------------
-cols_conc <-  setdiff(names(fra), c(rm_col, phychem_col, "det"))
+cols_conc <-  setdiff(names(fra), c(rm_col, phychem_col, "det", "ld", "lq"))
 conc_dt <- fra[det == "D"]
 conc_dt <- conc_dt[complete.cases(conc_dt[, ..cols_conc]), ..cols_conc]
 
-rf_fct_conc(conc_dt,
-            model_type = "CONCENTRATION",
-            cores = 7)
+rf_fct(conc_dt,
+       model_type = "CONCENTRATION",
+       cores = 7)
 
 
