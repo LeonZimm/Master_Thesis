@@ -1,3 +1,5 @@
+setwd("C:/Users/leonz/Documents/Ecotox_Studium/Master_Thesis/Data")
+
 library(data.table)
 library(dplyr)
 library(ggplot2)
@@ -22,7 +24,6 @@ load_sing_chem_fct <- function(cn) {
   return(info_list)
 }
 
-setwd("C:/Users/leonz/Documents/Ecotox_Studium/Master_Thesis/Data")
 fra <- readRDS("Tables_prepared/fra.rds")
 
 conc_col <- c("conc", "ld", "lq")
@@ -159,7 +160,6 @@ ggplot(feat_grps, aes(chem, fill = group)) +
 
 
 
-
 # Weekly Predictions ------------------------------------------------------
 site_sub <- CJ(unique(fra$site.id), unique(fra$cas))
 setnames(site_sub, c("V1", "V2"), c("site.id", "cas"))
@@ -218,7 +218,7 @@ week_dt <- week_dt[, -c(5:10)]
 rm_fct(c("week_dt", "fra"))
 try <- site_sub[week_dt, on = c("site.id", "cas")]
 
-# 1.4 Substance Sales Data --------------------------------------------
+# Substance Sales Data --------------------------------------------
 france_postal <- read_sf("Raw/France_PostalCode/codes_postaux_region.shp")
 france_postal <- st_transform(france_postal, crs = 2154) |> 
   filter(DEP != "20")
@@ -257,3 +257,50 @@ week_dt[is.na(yr_sales), yr_sales := 0]
 week_dt[, c("overlay", "amount", "ID") := NULL]
 
 rm_fct(c("france", "fra"))
+
+
+
+# Prediction on Unseen Substances -----------------------------------------
+phychem_extra <- read.xlsx("Raw/PhysicoChemical.xlsx", sep = ";", sheet = "Tabelle3") |> 
+  select(!c("dr_soil_typ")) |> 
+  setDT()
+parameter <- names(phychem_extra[, 6:ncol(phychem_extra)])
+p_type <- c("H", "F", "I")
+res <- phychem_extra[, .(name, p.type)]
+
+for (p in parameter) {
+  out     <- rep("", nrow(phychem_extra))
+  rng_gen <- range(fra[[p]], na.rm = TRUE)   # general range, all p.types
+  
+  for (t in unique(phychem_extra$p.type)) {
+    idx <- which(phychem_extra$p.type == t)
+    rng <- range(fra[p.type == t][[p]], na.rm = TRUE)   # type-specific range
+    v   <- phychem_extra[[p]][idx]
+    
+    out[idx] <- fcase(
+      is.na(v),                          "NA",
+      v < rng_gen[1] | v > rng_gen[2],   "X",   # outside general range (and therefore also the type range)
+      v < rng[1]     | v > rng[2],       ".",   # outside type range only
+      default = ""
+    )
+  }
+  
+  res[, (p) := out]
+}
+print(res, nrows = Inf)
+
+
+phychem <- readRDS("results/phychem.rds")
+phychem_model <- phychem$models$opt$model
+
+france <- readRDS("Raw/data.france.rds")
+france <-  france[year %in% 2010:2023 & p.type %in% c("H", "I", "F"),]
+france[ndq == "ND", det := "ND"]
+france[ndq != "ND", det := "D"]
+france[, det := as.factor(det)]
+france <- france[, -c("ndq")]
+france <- france[cas %in% phychem_extra$cas]
+
+france <- france[phychem_extra, on = "cas"]
+try <- france[fra, on = ""]
+
