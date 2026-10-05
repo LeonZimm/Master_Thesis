@@ -7,40 +7,13 @@ library(terra)
 library(tmap)
 library(data.table)
 
-rm_fct <- function(object) {
-  rm(list = setdiff(ls(envir = .GlobalEnv), c(object, "rm_fct")), envir = .GlobalEnv)
+rm_fct <- function(keep, env = parent.frame()) {
+  rm(list = setdiff(ls(envir = env), keep), envir = env)
   invisible(gc())
 }
-# Data Preparation ---------------------------------------------------
-# France Data
-france <- readRDS("Raw/data.france.rds")
-
-# Only years from 2010-2023 & only pesticides (H, I, F) & only quantifiable pesticides (Q)
-france <-  france[year %in% 2010:2023 & p.type %in% c("H", "I", "F"),]
-
-# Prepare response variable
-france[ndq == "ND", det := "ND"]
-france[ndq != "ND", det := "D"]
-france[, det := as.factor(det)]
-france <- france[, -c("ndq")]
-
-# Most abundant pesticides (10 x H, I, F)
-sales_dt <- readRDS("Raw/sales_data.rds")
-pest_dt <- france[, .N, by = .(cas, det, p.type)][, rel_ab := N/sum(N), by = cas]
-pest_inters <- pest_dt[cas %in% unique(sales_dt$cas)]
-pest_inters <- pest_inters[, ges := sum(N), by = cas][det == "D"]
-most_pes <- pest_inters[ges >= 100000][order(-rel_ab), .SD[1:10], by = p.type]
-france <- france[cas %in% most_pes$cas]
-
-sites <- read_sf("Raw/GIS/Results/line_layers_topage.gpkg", 
-                 layer = "merged_10km")
-france <- france[site.id %in% sites$site.id]
-france <- france[, month := month(as.Date(sample.d))]
-
-table_fct <- function(data) {
-  
+table_fct <- function(data, phychem_extra = FALSE) {
   # Substance Sales Data --------------------------------------------
-  cat("SALES", "\n")
+  cat("SALES", "\n\n")
   data_postal <- read_sf("Raw/France_PostalCode/codes_postaux_region.shp")
   data_postal <- st_transform(data_postal, crs = 2154) |> 
     filter(DEP != "20")
@@ -73,11 +46,13 @@ table_fct <- function(data) {
   data <- unique(data, by = c("sample.d", "cas", "site.id"))
   data[is.na(yr_sales), yr_sales := 0]
   data[, c("overlay", "amount", "ID") := NULL]
+  data[, month := month(as.Date(sample.d))]
   
-  rm_fct(deparse(substitute(data)))
+  
+  rm_fct("data")
   
   # Meteorology Data -------------------------------------------------
-  cat("METEROLOGY", "\n")
+  cat("METEROLOGY", "\n\n")
   met_8x8 <- readRDS("C:/Users/leonz/Documents/Ecotox_Studium/4. Semester/RPC/1. RPC_data_and_calc/1. RPC_raw_data/new_raw_data/met_france8x8grid_0523.rds")
   met_8x8[, ":="(LAMBX = LAMBX * 100, 
                  LAMBY = LAMBY * 100)]
@@ -101,7 +76,8 @@ table_fct <- function(data) {
     by = id]
   met_8x8[, tot_precip_7d := frollmean(tot_precip, n = 7, na.rm = TRUE)]
   met_8x8[, tot_precip_14d := frollmean(tot_precip, n = 14, na.rm = TRUE)]
-  met_8x8[, tot_precip_30d := frollmean(tot_precip, n = 30, na.rm = TRUE)]
+  met_8x8[, tot_precip_30d := frollmean(tot_precip, n = 30, na.rm = TRUE), 
+          by = id]
   
   lag_dt[, id := NULL]
   met_8x8 <- cbind(met_8x8, lag_dt)
@@ -115,20 +91,21 @@ table_fct <- function(data) {
   site_coord[, grid_id := nearest_id]
   
   data[site_coord, grid_id := i.grid_id, on = "site.id"]
+  rm_fct(c("data", "met_8x8"))
   
-  rm_fct(c(deparse(substitute(data)), "met_8x8"))
   met_cols <- c("id", "DATE", "tot_precip", "mean_temp", "windspeed", "mean_humid", "tot_evapot",
                 "pot_evapot", "soil_moist", "runoff", "tot_precip_7d", "tot_precip_14d", "tot_precip_30d",
                 "tot_precip_lag1", "tot_precip_lag2", "tot_precip_lag3", "tot_precip_lead1", "tot_precip_lead2", "tot_precip_lead3")
   
   idx <- met_8x8[data, on = c("DATE" = "sample.d", "id" = "grid_id"), which = TRUE]
   data[, (met_cols) := met_8x8[idx, ..met_cols]]
+  data[, c("grid_id", "id", "DATE") := NULL]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
-
+  
   # WWTP --------------------------------------------------------------------
-  cat("WWTP", "\n")
+  cat("WWTP", "\n\n")
   wwtp <- st_read("Raw/GIS/Results/wwtp_dist.gpkg") |> 
     st_drop_geometry() |> 
     drop_na() |> 
@@ -161,32 +138,40 @@ table_fct <- function(data) {
     set(data, which(is.na(data[[col]])), col, na_fill[[col]])
   }
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   
   # PhysicoChemcial Data ----------------------------------------------------
   cat("PHYSICOCHEMICAL", "\n")
-  phychem <- read.csv("Raw/PhysicoChemical.csv", sep = ";") |> 
-    select(!c("name", "dr_soil_typ")) |> 
-    setDT()
-  data <- phychem[data, on = "cas"]
+  if (phyhem_extry == TRUE) {
+    phychem_extra <- read.xlsx("Raw/PhysicoChemical.xlsx", sep = ";", sheet = "Tabelle3") |> 
+      select(!c("dr_soil_typ", "name", "rel_ab", "ges", "p.type")) |> 
+      setDT()
+    data <- phychem_extra[data, on = "cas"]
+  } else {
+    phychem <- read.csv("Raw/PhysicoChemical.csv", sep = ";") |> 
+      select(!c("name", "dr_soil_typ")) |> 
+      setDT()
+    data <- phychem[data, on = "cas"]
+  }
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   # Environmental Data --------------------------------------------------
-  cat("ENVIRONMENT", "\n")
+  cat("ENVIRONMENT", "\n\n")
   env_sa10b400 <- readRDS("Raw/spatial.sa10.b400.processed.rds")
   names_env <- names(env_sa10b400)
   rm_names <- grepl("rz.", names_env)
   rm_names <- names_env[rm_names]
+  env_sa10b400[, c(rm_names, "fid", "type", "start") := NULL]
   
-  data <- merge.data.table(data, env_sa10b400[, setdiff(names(env_sa10b400), rm_names), with = FALSE], 
-                           by.x = "site.id", by.y = "site_id",
-                           all.x = TRUE)
-  rm_fct(deparse(substitute(data)))
+  data[, (names(env_sa10b400)) := env_sa10b400[.SD, on = c("site_id" = "site.id"), .SD, .SDcols =  names(env_sa10b400)]]
+  data[, site_id := NULL]
+  
+  rm_fct("data")
   
   # Line Slope --------------------------------------------------------------
-  cat("LINE SLOPE", "\n")
+  cat("LINE SLOPE", "\n\n")
   linslp_layer <- st_layers("Raw/GIS/Results/line_slope_layers.gpkg")$name
   linslp_lst <- lapply(linslp_layer, function(l) {
     
@@ -213,11 +198,11 @@ table_fct <- function(data) {
   linslp <- mergelist(linslp_lst, on = "site.id", how = "full")
   data <- linslp[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   
   # Riparian Area Slope --------------------------------------------------------------
-  cat("RIPARiAN AREA SLOPE", "\n")
+  cat("RIPARiAN AREA SLOPE", "\n\n")
   ripslp_layer <- st_layers("Raw/GIS/Results/rip_slope_layers.gpkg")$name
   ripslp <- lapply(ripslp_layer, function(l) {
     
@@ -243,11 +228,11 @@ table_fct <- function(data) {
   ripslp <- mergelist(ripslp, on = "site.id", how = "full")
   data <- ripslp[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   
   # Zonal Slope --------------------------------------------------------------
-  cat("ZONAL SLOPE", "\n")
+  cat("ZONAL SLOPE", "\n\n")
   zonslp_layer <- st_layers("Raw/GIS/Results/zonal_slope_layers.gpkg")$name
   zonslp <- lapply(zonslp_layer, function(l) {
     
@@ -263,12 +248,12 @@ table_fct <- function(data) {
   zonslp <- mergelist(zonslp, on = "site.id", how = "full")
   data <- zonslp[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   
   
   # Riparian Land Use -------------------------------------------------------
-  cat("RIPARIAN LAND USE", "\n")
+  cat("RIPARIAN LAND USE", "\n\n")
   ripagri_layer <- st_layers("Raw/GIS/Results/rip_stats_layers.gpkg")$name
   ripagri <- lapply(ripagri_layer, function(l) {
     
@@ -285,12 +270,11 @@ table_fct <- function(data) {
   ripagri <- mergelist(ripagri, on = "site.id", how = "full")
   data <- ripagri[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
-  
+  rm_fct("data")
   
   
   # Width -------------------------------------------------------------------
-  cat("WIDTH", "\n")
+  cat("WIDTH", "\n\n")
   width_layer <- st_layers("Raw/GIS/Results/line_layers_topage.gpkg")$name
   width_layer <- width_layer[grepl("split_", width_layer) & !grepl("_topagePoints", width_layer)]
   
@@ -315,29 +299,51 @@ table_fct <- function(data) {
   width <- mergelist(width_lst, on = "site.id", how = "full")
   
   site_wid <- st_read("Raw/GIS/Results/line_layers_topage.gpkg", layer = "width_at_site") |> 
-    select(site.id, width, RANG) |> 
+    select(site.id, width) |> 
     st_drop_geometry() |>
     setDT()
   width <- site_wid[width, on = "site.id"]
   data <- width[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   
   # Length ------------------------------------------------------------------
-  cat("LENGTH", "\n")
+  cat("LENGTH", "\n\n")
   site_len <- st_read("Raw/GIS/Results/line_layers_topage.gpkg", layer = "merged_10km") |> 
     select(site.id, length) |> 
     st_drop_geometry() |>
     setDT()
   data <- site_len[data, on = "site.id"]
   
-  rm_fct(deparse(substitute(data)))
+  rm_fct("data")
   
   return(data)
 }
 
-try <- table_fct(france) 
+
+# Data Preparation ---------------------------------------------------
+# France Data
+france <- readRDS("Raw/data.france.rds")
+france <-  france[year %in% 2010:2023 & p.type %in% c("H", "I", "F"),]
+france[ndq == "ND", det := "ND"]
+france[ndq != "ND", det := "D"]
+france[, det := as.factor(det)]
+france <- france[, -c("ndq")]
+
+# Most abundant pesticides (10 x H, I, F)
+sales_dt <- readRDS("Raw/sales_data.rds")
+pest_dt <- france[, .N, by = .(cas, det, p.type)][, rel_ab := N/sum(N), by = cas]
+pest_inters <- pest_dt[cas %in% unique(sales_dt$cas)]
+pest_inters <- pest_inters[, ges := sum(N), by = cas][det == "D"]
+most_pes <- pest_inters[ges >= 100000][order(-rel_ab), .SD[1:10], by = p.type]
+france <- france[cas %in% most_pes$cas]
+france[, c("sample.id", "chem.code", "chemica", "c.class") := NULL]
+
+sites <- read_sf("Raw/GIS/Results/line_layers_topage.gpkg", 
+                 layer = "merged_10km")
+france <- france[site.id %in% sites$site.id]
+france <- table_fct(france) 
 
 # Compare Measured to Estimated Width -------------------------------------
 library(epiR)
