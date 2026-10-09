@@ -54,7 +54,7 @@ table_fct <- function(data,
   red_sales <- red_sales[intsec, on = "site.id", allow.cartesian = TRUE, nomatch = NULL]
   red_sales[sales_dt, amount := i.amount, on = .(ID, year, cas)]
   red_sales[, yr_sales := weighted.mean(amount, overlay, na.rm = TRUE), 
-       by = .(year, cas, site.id)]
+            by = .(year, cas, site.id)]
   red_sales <- unique(red_sales, by = c("year", "cas", "site.id"))
   data[, yr_sales := red_sales[.SD, on = .(site.id, year, cas), x.yr_sales]]
   data[is.na(yr_sales), yr_sales := 0]
@@ -112,6 +112,10 @@ table_fct <- function(data,
   data[, (met_cols) := met_8x8[idx, ..met_cols]]
   data[, c("grid_id", "id", "DATE") := NULL]
   
+  if (res_anal) {
+    cols <- setdiff(names(data[, -c("site.id", "sample.d", "cas")]), features)
+    data[, (cols) := NULL]
+  } 
   rm_fct()
   
   
@@ -142,7 +146,8 @@ table_fct <- function(data,
   setnames(uwwtp, c("uwwLoadEnteringUWWTP", "uwwWasteWaterTreated", "distance"), c("ww_load", "ww_treated", "wwtp_dis"))
   
   uwwtp <- uwwtp[, .(site.id, sample.d, nr_wwtp, wwtp_level, wwtp_dis, ww_treated, ww_load)]
-  data <- uwwtp[data, on = .(site.id, sample.d)]
+  cols <- setdiff(names(uwwtp), c("site.id", "sample.d"))
+  data[uwwtp, on = .(site.id, sample.d), (cols) := mget(paste0("i.", cols))]
   
   na_fill <- c(wwtp_dis = -1, wwtp_level = 0, nr_wwtp = 0, ww_load = 0, ww_treated = 0)
   for (col in names(na_fill)) {
@@ -156,14 +161,16 @@ table_fct <- function(data,
   cat("\n", "PHYSICOCHEMICAL", "\n")
   if (phychem_extra) {
     phychem <- read.xlsx("table_fct/PhysicoChemical.xlsx", sheet = "Tabelle3") |> 
-      select(!c("dr_soil_typ", "name", "rel_ab", "ges", "p.type")) |> 
+      select(!c("dr_soil_typ", "name", "rel_ab", "ges")) |> 
       setDT()
-    data <- phychem[data, on = "cas"]
+    cols <- setdiff(names(phychem), "cas")
+    data[phychem, on = .(cas), (cols) := mget(paste0("i.", cols))]
   } else {
     phychem <- read.xlsx("table_fct/PhysicoChemical.xlsx", sheet = "Tabelle1") |> 
       select(!c("name", "dr_soil_typ")) |> 
       setDT()
-    data <- phychem[data, on = "cas"]
+    cols <- setdiff(names(phychem), "cas")
+    data[phychem, on = .(cas), (cols) := mget(paste0("i.", cols))]
   }
   
   rm_fct()
@@ -355,7 +362,7 @@ table_fct <- function(data,
     cols <- setdiff(names(data[, -c("site.id")]), features)
     data[, (cols) := NULL]
   } 
-  
+  cat("\n", "FEATURES REMOVED", "\n\n")
   cols <- setdiff(names(site_dt), "site.id")
   data[, (cols) := site_dt[.SD, on = "site.id", .SD, .SDcols = cols]]
   
