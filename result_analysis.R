@@ -544,11 +544,18 @@ library(ranger)
 library(caret)
 week_dt <- readRDS("Tables_prepared/week_dt.rds")
 week_model <- readRDS("results/omnibus.rds")
+thr <- week_model$models$opt$res$threshold
 week_model <- week_model$models$opt$model
+years <- 2013:2023
 
-week_pred <- predict(week_model, week_dt)$predictions[, "D"]
-phch_pred <- ifelse(phch_pred >= phch$opt$res$threshold, "D", "ND")
-
+week_yearly_res <- lapply(years, function(y) {
+  cat("\n", "Predicting", y, "\n")
+  gc()
+  dt <- week_dt[year == y]
+  pred <- predict(week_model, dt)$predictions[, "D"]
+  pred <- ifelse(pred >= thr, "D", "ND")
+})
+week_pred_dt <- rbindlist(week_yearly_res)
 
 # Prediction on Unseen Substances -----------------------------------------
 # Selected Substances
