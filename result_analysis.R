@@ -1,4 +1,4 @@
-setwd("H:/Master/RandomForest")
+setwd("C:/Users/leonz/Documents/Ecotox_Studium/Master_Thesis/Data")
 
 library(data.table)
 library(dplyr)
@@ -518,9 +518,11 @@ ggplot(feat_grps, aes(chem, fill = group)) +
 
 
 # Weekly Predictions ------------------------------------------------------
+###### Probably useless #######
 site_sub <- CJ(unique(fra$site.id), unique(fra$cas))
 setnames(site_sub, c("V1", "V2"), c("site.id", "cas"))
 site_sub <- unique(fra[, -c(2:4, 7:10, 55:76, 102)])[site_sub, on = c("site.id", "cas")]
+###############################
 
 week_vec <- seq(from = as.Date("2013-01-01"),
                 to = as.Date("2023-12-31"),
@@ -531,15 +533,26 @@ week_dt_empty[unique(fra[, .(cas, p.type)]), on = "cas", p.type := i.p.type]
 week_dt_empty[, year := year(sample.d)]
 week_dt_empty <- readRDS("Tables_prepared/week_dt_empty.rds")
 
-model <- readRDS("results/omni/omnibus.rds")
+model <- readRDS("results/omnibus.rds")
 features <- model$rfs$remaining_features
 week_dt <- table_fct(week_dt_empty,
                      res_anal = TRUE,
                      features = features)
 
+# Prediction
+library(ranger)
+library(caret)
+week_dt <- readRDS("Tables_prepared/week_dt.rds")
+week_model <- readRDS("results/omnibus.rds")
+week_model <- week_model$models$opt$model
+
+week_pred <- predict(week_model, week_dt)$predictions[, "D"]
+phch_pred <- ifelse(phch_pred >= phch$opt$res$threshold, "D", "ND")
+
 
 # Prediction on Unseen Substances -----------------------------------------
-phychem_extra <- read.xlsx("table_fct/PhysicoChemical.xlsx", sep = ";", sheet = "Tabelle3") |> 
+# Selected Substances
+phychem_extra <- read.xlsx("table_fct/PhysicoChemical.xlsx", sheet = "Tabelle3") |> 
   select(!c("dr_soil_typ")) |> 
   setDT()
 parameter <- names(phychem_extra[, 6:ncol(phychem_extra)])
@@ -567,21 +580,61 @@ for (p in parameter) {
 }
 print(res, nrows = Inf)
 
-
-
+# Build Prediction-Table
 france <- readRDS("Raw/data.france.rds")
 france[, c("sample.id", "chem.code", "chemical", "c.class") := NULL]
 france <-  france[year %in% 2010:2023 & p.type %in% c("H", "I", "F"),]
 france[ndq == "ND", det := "ND"]
 france[ndq != "ND", det := "D"]
-france[, det := as.factor(det)]
-france <- france[, -c("ndq")]
+france[, ":="(det = as.factor(det),
+              ndq = NULL)]
 france <- france[cas %in% phychem_extra$cas]
-france <- table_fct(france, phychem)
+france <- readRDS("Tables_prepared/pyhchem_france_empty.rds")
 
-phychem <- readRDS("results/phychem.rds")
-phychem_model <- phychem$models$opt$model
+rfs <- readRDS("results/phychem/rfs.rds")
+phychem_features <- rfs$remaining_features
+phch_extr <- table_fct(france, 
+                       phychem_extra = TRUE,
+                       res_anal = TRUE,
+                       features = phychem_features)
+saveRDS(phch_extr, "Tables_prepared/phychem_france.rds")
 
+# Prediction
+library(ranger)
+library(caret)
+phch_extr <- readRDS("Tables_prepared/phychem_france.rds")
+phch <- readRDS("results/phychem/models.rds")
+phch_feat <- phch_model$opt$features
 
+phch_pred <- predict(phch_model$opt$model, phch_extr)$predictions[, "D"]
+phch_pred <- ifelse(phch_pred >= phch$opt$res$threshold, "D", "ND")
 
+phch_chem <- read.xlsx("table_fct/PhysicoChemical.xlsx", sheet = "Tabelle3") |> 
+  setDT()
+substances <- unique(phch_chem$name)
+all_comp <- setNames(vector("list", length(substances)), substances)
+
+phch_res <- lapply(substances, function(n) {
+  cat("\n", n, "\n")
+  henry <- phch_chem[name == n]$h
+  res <- predict(phch_model$opt$model, phch_extr[h == henry])$predictions[, "D"]
+  pred <- ifelse(res >= phch$opt$res$threshold, "D", "ND")
+  
+  cat("Prediction finished", "\n")
+  cf <- confusionMatrix(as.factor(pred),
+                        phch_extr[h == henry]$det,
+                        positive = "D")
+  
+  all_comp[[n]] <<- cf
+  dt <- data.table(name = n,
+                  rel_fre = cf$byClass["Detection Prevalence"],
+                  sens = cf$byClass["Sensitivity"],
+                  spec = cf$byClass["Specificity"],
+                  f1 = cf$byClass["F1"])
+})
+phch_dt <- rbindlist(phch_res)
+
+ggplot(phch_dt, aes(rel_fre, sens)) +
+  geom_point() +
+  geom_smooth(method = "lm")
 
